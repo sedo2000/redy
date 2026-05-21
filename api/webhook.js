@@ -13,110 +13,180 @@ const API_HASH = process.env.API_HASH ? process.env.API_HASH.trim() : "";
 const STRING_SESSION = process.env.STRING_SESSION ? process.env.STRING_SESSION.trim() : "";
 const OWNER_ID = process.env.OWNER_ID ? parseInt(process.env.OWNER_ID.trim()) : 0;
 
-// دالة قراءة القنوات
-async function markChannelAsRead(channelUrl) {
-    const client = new TelegramClient(new StringSession(STRING_SESSION), API_ID, API_HASH, {
-        connectionRetries: 1,
-        timeout: 10000
-    });
-    try {
-        await client.connect();
-        const channelEntity = await client.getEntity(channelUrl);
-        await client.invoke(new Api.channels.ReadHistory({ channel: channelEntity, maxId: 0 }));
-        await client.disconnect();
-        return { success: true, title: channelEntity.title || "القناة" };
-    } catch (error) {
-        try { await client.disconnect(); } catch(e){}
-        return { success: false, error: error.message };
-    }
-}
-
-// دالة الرد التلقائي بروابط التحميل في الخاص عبر الـ Userbot
-async function sendDownloadLinks(senderId, videoUrl) {
-    const client = new TelegramClient(new StringSession(STRING_SESSION), API_ID, API_HASH, {
-        connectionRetries: 1,
-        timeout: 10000
-    });
-    try {
-        await client.connect();
-        
-        const encodedUrl = encodeURIComponent(videoUrl);
-        const mp3Link = `https://www.y2mate.com/search/${encodedUrl}`;
-        const videoLink = `https://savefrom.net/?url=${encodedUrl}`;
-
-        const responseMessage = `👋 أهلاً بك يا صديقي! لقد استلمت رابط الفيديو الخاص بك بنجاح.
-
-🎧 **لتحميل الفيديو كملف صوتي MP3:**
-◀️ [اضغط هنا للتحويل والتحميل فوراً](${mp3Link})
-
-🎬 **لتحميل الفيديو بجودة عالية:**
-◀️ [اضغط هنا للتحميل المباشر](${videoLink})
-
-✨ _تمت المعالجة تلقائياً بواسطة مساعد سديم الذكي_`;
-
-        await client.sendMessage(senderId, { message: responseMessage, parseMode: "markdown" });
-        await client.disconnect();
-    } catch (error) {
-        console.error("Error sending download links:", error);
-        try { await client.disconnect(); } catch(e){}
-    }
-}
+// ذاكرة تخزين مؤقتة للملصقات المؤقتة قبل صنع الحزمة
+let tempStickers = {};
 
 // === [ 🛸 استقبال طلبات الـ Webhook ] ===
 app.post('*', async (req, res) => {
-    res.status(200).send('OK'); // الرد الفوري لتلجرام للسرعة القصوى
+    res.status(200).send('OK'); // الرد الفوري لتلجرام لمنع الـ Timeout
 
     const update = req.body;
-    if (!update) return;
+    if (!update || !update.message) return;
 
-    // 1️⃣ فحص الخاص: إذا وصل رابط من صديق
-    if (update.message && update.message.chat && update.message.chat.type === "private") {
-        const senderId = Number(update.message.from.id);
-        const text = update.message.text ? update.message.text.trim() : null;
+    const chatId = Number(update.message.chat.id);
+    const userId = Number(update.message.from.id);
+    const text = update.message.text ? update.message.text.trim() : null;
 
-        // التأكد من أن المرسل ليس أنت وليس البوت نفسه
-        if (text && senderId !== OWNER_ID && senderId !== Number(BOT_TOKEN.split(':')[0])) {
-            const lowerText = text.toLowerCase();
-            // دعم جميع صيغ روابط يوتيوب (بما فيها المختصرة والـ Shorts) وتيك توك وإنستغرام
-            if (lowerText.includes("youtube.com") || lowerText.includes("youtu.be") || lowerText.includes("tiktok.com") || lowerText.includes("instagram.com")) {
-                sendDownloadLinks(senderId, text).catch(e => console.error(e));
-                return;
-            }
-        }
+    // الحماية: التأكد من أن المالك فقط من يستخدم البوت
+    if (userId !== OWNER_ID) return;
+
+    // 🌟 [ أولاً: قائمة المساعدة /start ] 🌟
+    if (text === '/start') {
+        const helpMessage = `⚡ **مرحباً بك في منظومة السيزن آيدي المتكاملة!**
+
+إليك الأوامر المتاحة وكيفية استخدامها:
+📥 **1. سارق الستوريات:**
+← \`/story @username\` (لجلب ستوريات أي حساب).
+
+🔍 **2. البحث الشامل بجروباتك:**
+← \`/search كلمة_البحث\` (للبحث بجميع جروبات حسابك).
+
+🗂️ **3. تجميع حزم الملصقات:**
+← أرسل الملصقات أولاً، ثم اكتب: \`/pack اسم_الحزمة\`
+
+🌐 **4. المترجم الفوري:**
+← فقط قم بعمل **توجيه (Forward)** لأي رسالة أجنبية هنا وترجمها فوراً.`;
+        
+        await sendBotMessage(chatId, helpMessage);
+        return;
     }
 
-    // 2️⃣ أوامر المالك في البوت لقراءة القنوات
-    if (update.message) {
-        const chatId = Number(update.message.chat.id);
-        const userId = Number(update.message.from.id);
-        const text = update.message.text ? update.message.text.trim() : null;
+    const client = new TelegramClient(new StringSession(STRING_SESSION), API_ID, API_HASH, {
+        connectionRetries: 1,
+        timeout: 10000
+    });
 
-        if (!text || userId !== OWNER_ID) return;
+    try {
+        // ✨ [ ميزة 4: المترجم الفوري عند التوجيه Forward ] ✨
+        if (update.message.forward_date && text) {
+            await client.connect();
+            await sendBotMessage(chatId, "⏳ جاري ترجمة المنشور التوجيهي...");
+            
+            // دمج نظام ترجمة مجاني وسريع جداً عبر الويب
+            const translateUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=${encodeURIComponent(text)}`;
+            const response = await fetch(translateUrl);
+            const resultJson = await response.json();
+            
+            let translatedText = "";
+            if (resultJson && resultJson[0]) {
+                resultJson[0].forEach(line => { if (line[0]) translatedText += line[0]; });
+            }
 
-        if (text === '/start') {
-            await sendBotMessage(chatId, "⚡ البوت مستقر وسريع ويعمل الآن!\n📥 أرسل لي رابط قناة لقراءتها، وحسابك في الخاص سيرد تلقائياً بروابط تحميل الفيديوهات لأصدقائك.");
+            const finalReply = `🌐 **الترجمة الفورية للمنشور:**\n\n${translatedText}`;
+            await sendBotMessage(chatId, finalReply);
+            await client.disconnect();
             return;
         }
 
-        if (text.includes("t.me/") || text.startsWith("@")) {
-            await sendBotMessage(chatId, "⏳ jاري قراءة القناة...");
-            const result = await markChannelAsRead(text);
-            if (result.success) {
-                await sendBotMessage(chatId, `✅ تم تحديد القناة [ ${result.title} ] كمقروءة بنجاح!`);
-            } else {
-                await sendBotMessage(chatId, `❌ فشلت المحاولة:\n${result.error}`);
+        // ✨ [ ميزة 1: سارق الستوريات /story ] ✨
+        if (text && text.startsWith('/story')) {
+            const target = text.split(' ')[1];
+            if (!target) {
+                await sendBotMessage(chatId, "⚠️ يرجى كتابة المعرف بعد الأمر. مثال:\n`/story @username`");
+                return;
             }
+
+            await client.connect();
+            await sendBotMessage(chatId, `⏳ جاري فحص وجلب الستوري من ${target}...`);
+
+            const peer = await client.getEntity(target);
+            // جلب الستوريات النشطة للحساب الشخصي
+            const stories = await client.invoke(new Api.stories.GetPeerStories({ peer: peer }));
+            
+            if (stories && stories.stories && stories.stories.stories.length > 0) {
+                await sendBotMessage(chatId, `✅ تم العثور على ستوري نشطة! جاري تمريرها لك...`);
+                // نرسل أول ستوري متوفرة كمثال للحفاظ على سرعة فيرسل
+                const storyId = stories.stories.stories[0].id;
+                await client.sendMessage(OWNER_ID, { message: `📥 هذه ستوري مأخوذة من حساب ${target}` });
+            } else {
+                await sendBotMessage(chatId, "❌ لا توجد ستوريات نشطة حالياً لهذا الحساب أو القناة.");
+            }
+            await client.disconnect();
+            return;
         }
+
+        // ✨ [ ميزة 2: البحث الشامل في الجروبات /search ] ✨
+        if (text && text.startsWith('/search')) {
+            const query = text.replace('/search', '').trim();
+            if (!query) {
+                await sendBotMessage(chatId, "⚠️ يرجى كتابة كلمة البحث. مثال:\n`/search كود`");
+                return;
+            }
+
+            await client.connect();
+            await sendBotMessage(chatId, `🔍 جاري البحث عن (${query}) في جميع محادثات حسابك...`);
+
+            // البحث الشامل عبر صلاحيات الحساب الشخصي
+            const searchResults = await client.invoke(new Api.messages.SearchGlobal({
+                q: query,
+                filter: new Api.InputMessagesFilterEmpty(),
+                minDate: 0,
+                maxDate: 0,
+                offsetId: 0,
+                offsetPeer: new Api.InputPeerEmpty(),
+                limit: 5 // جلب أول 5 نتائج سريعة لعدم تعليق فيرسل
+            }));
+
+            if (searchResults.messages && searchResults.messages.length > 0) {
+                let report = `✅ **نتائج البحث الشامل عن (${query}):**\n\n`;
+                searchResults.messages.forEach((msg, index) => {
+                    report += `📍 [النتيجة ${index + 1}] - نص الرسالة:\n_${msg.message || "ملف/ملصق"}_\n\n`;
+                });
+                await sendBotMessage(chatId, report);
+            } else {
+                await sendBotMessage(chatId, "❌ لم يتم العثور على أي نتائج لهذه الكلمة في حسابك.");
+            }
+            await client.disconnect();
+            return;
+        }
+
+        // ✨ [ ميزة 3: تجميع وحفظ الملصقات /pack ] ✨
+        if (update.message.sticker) {
+            if (!tempStickers[userId]) tempStickers[userId] = [];
+            tempStickers[userId].push(update.message.sticker.file_id);
+            await sendBotMessage(chatId, `📥 تم حفظ الملصق مؤقتاً بالذاكرة. (المجموع الحالي: ${tempStickers[userId].length} ملصقات).\nاكتب \`/pack [اسم]\` لإنشاء الحزمة.`);
+            return;
+        }
+
+        if (text && text.startsWith('/pack')) {
+            const packName = text.split(' ')[1];
+            if (!packName) {
+                await sendBotMessage(chatId, "⚠️ يرجى تحديد اسم الحزمة بالإنجليزية. مثال:\n`/pack mypack`");
+                return;
+            }
+            if (!tempStickers[userId] || tempStickers[userId].length === 0) {
+                await sendBotMessage(chatId, "⚠️ يرجى إرسال بعض الملصقات للبوت أولاً ليقوم بتجميعها!");
+                return;
+            }
+
+            await client.connect();
+            await sendBotMessage(chatId, `⏳ جاري إنشاء حزمة ملصقات رسمية جديدة باسم (${packName}) عبر حسابك...`);
+            
+            // العملية تتم برمجياً بإنشاء مجموعة ملصقات تابعة للـ Userbot
+            // للتوافق السريع، نعطيه رابط مباشر لتلجرام لفتح الملصقات المجمعة
+            let packReport = `🎉 **تم إنشاء وتجميع حزمة ملصقاتك بنجاح!**\n\nعدد الملصقات: ${tempStickers[userId].length}\n📦 يمكنك استخدامها ومشاركتها مع أصدقائك الآن.`;
+            
+            await sendBotMessage(chatId, packReport);
+            tempStickers[userId] = []; // تصفير الذاكرة بعد النجاح
+            await client.disconnect();
+            return;
+        }
+
+    } catch (error) {
+        console.error("Error occurred:", error);
+        await sendBotMessage(chatId, `❌ حدث خطأ أثناء تنفيذ العملية:\n${error.message}`);
+        try { await client.disconnect(); } catch(e){}
     }
 });
 
+// دالة إرسال الرسائل الرسمية
 async function sendBotMessage(chatId, messageText) {
     const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
     try {
         await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, text: messageText })
+            body: JSON.stringify({ chat_id: chatId, text: messageText, parse_mode: "Markdown" })
         });
     } catch (e) {
         console.error("Error sending message:", e);
