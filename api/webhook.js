@@ -5,29 +5,26 @@ const { StringSession } = require('telegram/sessions');
 const app = express();
 app.use(express.json());
 
-// === [ ⚙️ جلب الإعدادات من بيئة فيرسل ] ===
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const API_ID = parseInt(process.env.API_ID);
-const API_HASH = process.env.API_HASH;
-const OWNER_ID = parseInt(process.env.OWNER_ID);
+// === [ ⚙️ جلب الإعدادات مع تنظيفها تماماً من أي مسافات زائدة ] ===
+const BOT_TOKEN = process.env.BOT_TOKEN ? process.env.BOT_TOKEN.trim() : "";
+const API_ID = process.env.API_ID ? parseInt(process.env.API_ID.trim()) : 0;
+const API_HASH = process.env.API_HASH ? process.env.API_HASH.trim() : "";
+const STRING_SESSION = process.env.STRING_SESSION ? process.env.STRING_SESSION.trim() : "";
 
-// متغيرات ديناميكية يتم حفظها في الذاكرة المؤقتة أثناء تشغيل السيرفر
+// تحويل OWNER_ID إلى رقم بشكل صارم وتنظيفه
+const OWNER_ID = process.env.OWNER_ID ? parseInt(process.env.OWNER_ID.trim()) : 0;
+
+// مصفوفة المسؤولين المصرح لهم
 let allowedAdmins = [OWNER_ID]; 
-let currentSession = process.env.STRING_SESSION || ""; // تبدأ بالجلسة المخزنة في فيرسل إن وجدت
+let currentSession = STRING_SESSION;
 
-// كائنات لإدارة عملية تسجيل الدخول المؤقتة
-let loginClients = {}; // لحفظ كائن التلجرام لكل مستخدم أثناء تسجيل الدخول
-let loginStates = {};  // لحفظ الحالة الحالية للمستخدم (phone, code, password)
+let loginClients = {}; 
+let loginStates = {};  
 
-// التحقق من الإعدادات الأساسية
-if (!BOT_TOKEN || !API_ID || !API_HASH || !OWNER_ID) {
-    console.error("❌ خطأ: بعض المتغيرات البيئية (Environment Variables) مفقودة في فيرسل!");
-}
-
-// === [ 🤖 دالة تشغيل الـ Userbot لقراءة القناة ] ===
+// دالة تشغيل الـ Userbot لقراءة القناة
 async function markChannelAsRead(channelUrl) {
     if (!currentSession) {
-        return { success: false, error: "لم يتم استخراج جلسة السيزن (String Session) بعد. يرجى تسجيل الدخول أولاً عن طريق إرسال رقم الهاتف." };
+        return { success: false, error: "لم يتم استخراج جلسة السيزن بعد. يرجى إرسال رقم الهاتف أولاً." };
     }
 
     const client = new TelegramClient(new StringSession(currentSession), API_ID, API_HASH, {
@@ -53,15 +50,17 @@ async function markChannelAsRead(channelUrl) {
     }
 }
 
-// === [ 🌐 استقبال طلبات الـ Webhook من تلجرام ] ===
+// استقبال طلبات الـ Webhook من تلجرام
 app.post('*', async (req, res) => {
+    // رد فوري لتلجرام
     res.status(200).send('OK');
 
     const update = req.body;
     if (!update || !update.message) return;
 
-    const chatId = update.message.chat.id;
-    const userId = update.message.from.id;
+    // تحويل الـ IDs القادمة من تلجرام إلى أرقام بشكل صريح للضمان
+    const chatId = Number(update.message.chat.id);
+    const userId = Number(update.message.from.id);
     const text = update.message.text ? update.message.text.trim() : null;
 
     if (!text) return;
@@ -80,7 +79,7 @@ app.post('*', async (req, res) => {
         return;
     }
 
-    // --- نظام استخراج جلسة السيزن (للمالك فقط لحماية الحساب) ---
+    // --- نظام استخراج جلسة السيزن (للمالك فقط) ---
     if (userId === OWNER_ID) {
         // الخطوة 1: استقبال رقم الهاتف
         if (text.startsWith('+')) {
@@ -92,13 +91,11 @@ app.post('*', async (req, res) => {
 
             try {
                 await client.connect();
-                // طلب إرسال كود التحقق من تلجرام
                 const sendCodeResult = await client.sendCode(
                     { apiId: API_ID, apiHash: API_HASH },
                     text
                 );
 
-                // حفظ البيانات في الذاكرة المؤقتة للانتقال للخطوة التالية
                 loginClients[userId] = client;
                 loginStates[userId] = {
                     phone: text,
@@ -119,13 +116,11 @@ app.post('*', async (req, res) => {
             const client = loginClients[userId];
 
             try {
-                // محاولة تسجيل الدخول بالكود
                 await client.signIn({
                     phoneNumber: state.phone,
                     phoneCodeHash: state.phoneCodeHash,
                     phoneCode: text,
                     onError: async (err) => {
-                        // إذا كان الحساب محمي بالتحقق بخطوتين
                         if (err.message.includes("SESSION_PASSWORD_NEEDED")) {
                             state.step = 'WAITING_PASSWORD';
                             await sendBotMessage(chatId, "🔐 حسابك محمي بـ (التحقق بخطوتين).\nالرجاء إرسال كلمة سر الحساب الآن.");
@@ -135,12 +130,9 @@ app.post('*', async (req, res) => {
                     }
                 });
 
-                // إذا نجح تسجيل الدخول مباشرة بدون كلمة سر
                 if (state.step === 'WAITING_CODE') {
                     currentSession = client.session.save();
-                    await sendBotMessage(chatId, `✅ تم تسجيل الدخول بنجاح!\n\n🔑 **جلسة السيزن الخاصة بك (String Session):**\n\`${currentSession}\`\n\nقم بنسخها وحفظها في إعدادات فيرسل باسم \`STRING_SESSION\` لضمان عدم ضياعها عند إعادة تشغيل السيرفر.`);
-                    
-                    // تنظيف الذاكرة
+                    await sendBotMessage(chatId, `✅ تم تسجيل الدخول بنجاح!\n\n🔑 **جلسة السيزن الخاصة بك:**\n\`${currentSession}\`\n\nقم بنسخها وحفظها في إعدادات فيرسل باسم \`STRING_SESSION\`.`);
                     delete loginClients[userId];
                     delete loginStates[userId];
                 }
@@ -152,18 +144,14 @@ app.post('*', async (req, res) => {
             return;
         }
 
-        // الخطوة 3: استقبال كلمة مرور التحقق بخطوتين (إن وجدت)
+        // الخطوة 3: استقبال كلمة المرور
         if (loginStates[userId] && loginStates[userId].step === 'WAITING_PASSWORD') {
             const client = loginClients[userId];
 
             try {
-                await client.signIn({
-                    password: text
-                });
-
+                await client.signIn({ password: text });
                 currentSession = client.session.save();
-                await sendBotMessage(chatId, `✅ تم التحقق وتسجيل الدخول بنجاح!\n\n🔑 **جلسة السيزن الخاصة بك (String Session):**\n\`${currentSession}\`\n\nقم بنسخها وحفظها في إعدادات فيرسل باسم \`STRING_SESSION\` لضمان عدم ضياعها عند إعادة تشغيل السيرفر.`);
-                
+                await sendBotMessage(chatId, `✅ تم التحقق بنجاح!\n\n🔑 **جلسة السيزن الخاصة بك:**\n\`${currentSession}\`\n\nقم بنسخها وحفظها في إعدادات فيرسل باسم \`STRING_SESSION\`.`);
                 delete loginClients[userId];
                 delete loginStates[userId];
             } catch (err) {
@@ -173,16 +161,14 @@ app.post('*', async (req, res) => {
         }
     }
 
-    // --- التحقق من الصلاحية للأعضاء العاديين ---
+    // --- التحقق من الصلاحية للأعضاء العاديين أو القنوات ---
     if (!allowedAdmins.includes(userId)) {
-        await sendBotMessage(chatId, "⚠️ عذراً، ليس لديك صلاحية لاستخدام هذا البوت.");
-        return;
+        return; // تجاهل تماماً أي شخص غريب لحماية البوت
     }
 
-    // --- استقبال روابط القنوات وتحديدها كمقروءة ---
+    // استقبال روابط القنوات
     if (text.includes("t.me/") || text.startsWith("@")) {
         await sendBotMessage(chatId, "⏳ جاري الاتصال بحسابك وتحديد القناة كمقروءة...");
-        
         const result = await markChannelAsRead(text);
         
         if (result.success) {
@@ -193,7 +179,6 @@ app.post('*', async (req, res) => {
     }
 });
 
-// دالة إرسال الرسائل عبر الـ Bot API الرسمي
 async function sendBotMessage(chatId, messageText) {
     const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
     try {
