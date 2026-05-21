@@ -1,0 +1,9 @@
+{
+  "name": "telegram-read-bot",
+  "version": "1.0.0",
+  "main": "api/webhook.js",
+  "dependencies": {
+    "express": "^4.18.2",
+    "telegram": "^2.22.2"
+  }
+}
