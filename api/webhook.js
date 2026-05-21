@@ -6,14 +6,14 @@ const { Api } = require('telegram');
 const app = express();
 app.use(express.json());
 
-// === [ ⚙️ جلب الإعدادات من بيئة فيرسل حصراً ] ===
+// === [ ⚙️ جلب الإعدادات من بيئة فيرسل ] ===
 const BOT_TOKEN = process.env.BOT_TOKEN ? process.env.BOT_TOKEN.trim() : "";
 const API_ID = process.env.API_ID ? parseInt(process.env.API_ID.trim()) : 0;
 const API_HASH = process.env.API_HASH ? process.env.API_HASH.trim() : "";
 const STRING_SESSION = process.env.STRING_SESSION ? process.env.STRING_SESSION.trim() : "";
 const OWNER_ID = process.env.OWNER_ID ? parseInt(process.env.OWNER_ID.trim()) : 0;
 
-// دالة قراءة القنوات الكلاسيكية
+// دالة قراءة القنوات
 async function markChannelAsRead(channelUrl) {
     const client = new TelegramClient(new StringSession(STRING_SESSION), API_ID, API_HASH, {
         connectionRetries: 1,
@@ -40,10 +40,7 @@ async function sendDownloadLinks(senderId, videoUrl) {
     try {
         await client.connect();
         
-        // تنظيف الرابط وترميزه بشكل آمن لعناوين الويب
         const encodedUrl = encodeURIComponent(videoUrl);
-        
-        // إنشاء روابط خارجية مجانية وسريعة جداً للتحميل المباشر وصيغ MP3
         const mp3Link = `https://www.y2mate.com/search/${encodedUrl}`;
         const videoLink = `https://savefrom.net/?url=${encodedUrl}`;
 
@@ -67,26 +64,28 @@ async function sendDownloadLinks(senderId, videoUrl) {
 
 // === [ 🛸 استقبال طلبات الـ Webhook ] ===
 app.post('*', async (req, res) => {
-    res.status(200).send('OK'); // الرد الفوري لتلجرام للسرعة
+    res.status(200).send('OK'); // الرد الفوري لتلجرام للسرعة القصوى
 
     const update = req.body;
     if (!update) return;
 
-    // 1️⃣ أولاً: إذا أرسل لك أي شخص رابط فيديو في الخاص (يوتيوب، تيك توك، إلخ)
-    if (update.message && update.message.chat.type === "private") {
+    // 1️⃣ فحص الخاص: إذا وصل رابط من صديق
+    if (update.message && update.message.chat && update.message.chat.type === "private") {
         const senderId = Number(update.message.from.id);
         const text = update.message.text ? update.message.text.trim() : null;
 
+        // التأكد من أن المرسل ليس أنت وليس البوت نفسه
         if (text && senderId !== OWNER_ID && senderId !== Number(BOT_TOKEN.split(':')[0])) {
-            // التحقق مما إذا كان النص يحتوي على رابط فيديو شهير
-            if (text.includes("youtube.com") || text.includes("youtu.be") || text.includes("tiktok.com") || text.includes("instagram.com")) {
+            const lowerText = text.toLowerCase();
+            // دعم جميع صيغ روابط يوتيوب (بما فيها المختصرة والـ Shorts) وتيك توك وإنستغرام
+            if (lowerText.includes("youtube.com") || lowerText.includes("youtu.be") || lowerText.includes("tiktok.com") || lowerText.includes("instagram.com")) {
                 sendDownloadLinks(senderId, text).catch(e => console.error(e));
                 return;
             }
         }
     }
 
-    // 2️⃣ ثانياً: معالجة أوامر المالك والمسؤولين داخل البوت الرسمي لقراءة القنوات
+    // 2️⃣ أوامر المالك في البوت لقراءة القنوات
     if (update.message) {
         const chatId = Number(update.message.chat.id);
         const userId = Number(update.message.from.id);
@@ -95,12 +94,12 @@ app.post('*', async (req, res) => {
         if (!text || userId !== OWNER_ID) return;
 
         if (text === '/start') {
-            await sendBotMessage(chatId, "⚡ البوت مستقر وسريع ويعمل الآن!\n📥 أرسل لي معرف أو رابط قناة لقراءتها، وحسابك في الخاص سيرد تلقائياً بروابط تحميل يوتيوب لأصدقائك.");
+            await sendBotMessage(chatId, "⚡ البوت مستقر وسريع ويعمل الآن!\n📥 أرسل لي رابط قناة لقراءتها، وحسابك في الخاص سيرد تلقائياً بروابط تحميل الفيديوهات لأصدقائك.");
             return;
         }
 
         if (text.includes("t.me/") || text.startsWith("@")) {
-            await sendBotMessage(chatId, "⏳ جاري قراءة القناة...");
+            await sendBotMessage(chatId, "⏳ jاري قراءة القناة...");
             const result = await markChannelAsRead(text);
             if (result.success) {
                 await sendBotMessage(chatId, `✅ تم تحديد القناة [ ${result.title} ] كمقروءة بنجاح!`);
