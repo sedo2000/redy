@@ -13,11 +13,11 @@ const API_HASH = process.env.API_HASH ? process.env.API_HASH.trim() : "";
 const STRING_SESSION = process.env.STRING_SESSION ? process.env.STRING_SESSION.trim() : "";
 const OWNER_ID = process.env.OWNER_ID ? parseInt(process.env.OWNER_ID.trim()) : 0;
 
-// === [ 🌐 دالة قراءة القنوات - سريعة ومستقرة ] ===
+// دالة قراءة القنوات الكلاسيكية
 async function markChannelAsRead(channelUrl) {
     const client = new TelegramClient(new StringSession(STRING_SESSION), API_ID, API_HASH, {
         connectionRetries: 1,
-        timeout: 10000 // مهلة 10 ثوانٍ كحد أقصى لمنع تعليق فيرسل
+        timeout: 10000
     });
     try {
         await client.connect();
@@ -31,30 +31,74 @@ async function markChannelAsRead(channelUrl) {
     }
 }
 
+// دالة الرد التلقائي بروابط التحميل في الخاص عبر الـ Userbot
+async function sendDownloadLinks(senderId, videoUrl) {
+    const client = new TelegramClient(new StringSession(STRING_SESSION), API_ID, API_HASH, {
+        connectionRetries: 1,
+        timeout: 10000
+    });
+    try {
+        await client.connect();
+        
+        // تنظيف الرابط وترميزه بشكل آمن لعناوين الويب
+        const encodedUrl = encodeURIComponent(videoUrl);
+        
+        // إنشاء روابط خارجية مجانية وسريعة جداً للتحميل المباشر وصيغ MP3
+        const mp3Link = `https://www.y2mate.com/search/${encodedUrl}`;
+        const videoLink = `https://savefrom.net/?url=${encodedUrl}`;
+
+        const responseMessage = `👋 أهلاً بك يا صديقي! لقد استلمت رابط الفيديو الخاص بك بنجاح.
+
+🎧 **لتحميل الفيديو كملف صوتي MP3:**
+◀️ [اضغط هنا للتحويل والتحميل فوراً](${mp3Link})
+
+🎬 **لتحميل الفيديو بجودة عالية:**
+◀️ [اضغط هنا للتحميل المباشر](${videoLink})
+
+✨ _تمت المعالجة تلقائياً بواسطة مساعد سديم الذكي_`;
+
+        await client.sendMessage(senderId, { message: responseMessage, parseMode: "markdown" });
+        await client.disconnect();
+    } catch (error) {
+        console.error("Error sending download links:", error);
+        try { await client.disconnect(); } catch(e){}
+    }
+}
+
 // === [ 🛸 استقبال طلبات الـ Webhook ] ===
 app.post('*', async (req, res) => {
-    // الرد الفوري لتلجرام أولاً لجعل البوت سريعاً جداً في المحادثة
-    res.status(200).send('OK'); 
+    res.status(200).send('OK'); // الرد الفوري لتلجرام للسرعة
 
     const update = req.body;
-    if (!update || !update.message) return;
+    if (!update) return;
 
-    const chatId = Number(update.message.chat.id);
-    const userId = Number(update.message.from.id);
-    const text = update.message.text ? update.message.text.trim() : null;
+    // 1️⃣ أولاً: إذا أرسل لك أي شخص رابط فيديو في الخاص (يوتيوب، تيك توك، إلخ)
+    if (update.message && update.message.chat.type === "private") {
+        const senderId = Number(update.message.from.id);
+        const text = update.message.text ? update.message.text.trim() : null;
 
-    if (!text) return;
+        if (text && senderId !== OWNER_ID && senderId !== Number(BOT_TOKEN.split(':')[0])) {
+            // التحقق مما إذا كان النص يحتوي على رابط فيديو شهير
+            if (text.includes("youtube.com") || text.includes("youtu.be") || text.includes("tiktok.com") || text.includes("instagram.com")) {
+                sendDownloadLinks(senderId, text).catch(e => console.error(e));
+                return;
+            }
+        }
+    }
 
-    // التأكد من أن المالك أو المسؤول هو من يرسل الأمر
-    if (userId === OWNER_ID) {
-        
-        // أمر ترحيبي وفحص السرعة
+    // 2️⃣ ثانياً: معالجة أوامر المالك والمسؤولين داخل البوت الرسمي لقراءة القنوات
+    if (update.message) {
+        const chatId = Number(update.message.chat.id);
+        const userId = Number(update.message.from.id);
+        const text = update.message.text ? update.message.text.trim() : null;
+
+        if (!text || userId !== OWNER_ID) return;
+
         if (text === '/start') {
-            await sendBotMessage(chatId, "⚡ أهلاً بك يا مالكي! البوت يعمل الآن بأعلى سرعة ومستقر تماماً.\n\n📥 أرسل لي رابط أي قناة لتحديدها كمقروءة فوراً.");
+            await sendBotMessage(chatId, "⚡ البوت مستقر وسريع ويعمل الآن!\n📥 أرسل لي معرف أو رابط قناة لقراءتها، وحسابك في الخاص سيرد تلقائياً بروابط تحميل يوتيوب لأصدقائك.");
             return;
         }
 
-        // تنفيذ أمر قراءة القنوات الأساسي والسريع
         if (text.includes("t.me/") || text.startsWith("@")) {
             await sendBotMessage(chatId, "⏳ جاري قراءة القناة...");
             const result = await markChannelAsRead(text);
@@ -63,12 +107,10 @@ app.post('*', async (req, res) => {
             } else {
                 await sendBotMessage(chatId, `❌ فشلت المحاولة:\n${result.error}`);
             }
-            return;
         }
     }
 });
 
-// دالة إرسال الرسائل الرسمية
 async function sendBotMessage(chatId, messageText) {
     const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
     try {
