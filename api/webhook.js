@@ -18,7 +18,7 @@ let tempStickers = {};
 
 // === [ 🛸 استقبال طلبات الـ Webhook ] ===
 app.post('*', async (req, res) => {
-    res.status(200).send('OK'); // الرد الفوري لتلجرام لمنع الـ Timeout
+    res.status(200).send('OK'); // الرد الفوري لمنع الـ Timeout في فيرسل
 
     const update = req.body;
     if (!update || !update.message) return;
@@ -30,22 +30,22 @@ app.post('*', async (req, res) => {
     // الحماية: التأكد من أن المالك فقط من يستخدم البوت
     if (userId !== OWNER_ID) return;
 
-    // 🌟 [ أولاً: قائمة المساعدة /start ] 🌟
-    if (text === '/start') {
-        const helpMessage = `⚡ **مرحباً بك في منظومة السيزن آيدي المتكاملة!**
+    // 🌟 [ أولاً: لوحة التحكم المحدثة بالنقطة ] 🌟
+    if (text === '.start') {
+        const helpMessage = `⚡ **مرحباً بك في منظومة السيزن آيدي بنظام النقطة (.)**
 
-إليك الأوامر المتاحة وكيفية استخدامها:
+إليك الأوامر المتاحة بعد التعديل:
 📥 **1. سارق الستوريات:**
-← \`/story @username\` (لجلب ستوريات أي حساب).
+← \`.story @username\` (جلب وتحميل ستوريات الحساب).
 
 🔍 **2. البحث الشامل بجروباتك:**
-← \`/search كلمة_البحث\` (للبحث بجميع جروبات حسابك).
+← \`.search كلمة_البحث\` (البحث بجميع جروبات حسابك).
 
 🗂️ **3. تجميع حزم الملصقات:**
-← أرسل الملصقات أولاً، ثم اكتب: \`/pack اسم_الحزمة\`
+← أرسل الملصقات أولاً، ثم اكتب: \`.pack اسم_الحزمة\`
 
-🌐 **4. المترجم الفوري:**
-← فقط قم بعمل **توجيه (Forward)** لأي رسالة أجنبية هنا وترجمها فوراً.`;
+🌐 **4. المترجم الفوري عند التوجيه:**
+← قم بعمل **توجيه (Forward)** لأي رسالة أجنبية هنا ليتم ترجمتها تلقائياً.`;
         
         await sendBotMessage(chatId, helpMessage);
         return;
@@ -62,7 +62,6 @@ app.post('*', async (req, res) => {
             await client.connect();
             await sendBotMessage(chatId, "⏳ جاري ترجمة المنشور التوجيهي...");
             
-            // دمج نظام ترجمة مجاني وسريع جداً عبر الويب
             const translateUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=${encodeURIComponent(text)}`;
             const response = await fetch(translateUrl);
             const resultJson = await response.json();
@@ -78,11 +77,11 @@ app.post('*', async (req, res) => {
             return;
         }
 
-        // ✨ [ ميزة 1: سارق الستوريات /story ] ✨
-        if (text && text.startsWith('/story')) {
+        // ✨ [ ميزة 1: سارق الستوريات وتحميل الميديا الفورية .story ] ✨
+        if (text && text.startsWith('.story')) {
             const target = text.split(' ')[1];
             if (!target) {
-                await sendBotMessage(chatId, "⚠️ يرجى كتابة المعرف بعد الأمر. مثال:\n`/story @username`");
+                await sendBotMessage(chatId, "⚠️ يرجى كتابة المعرف بعد الأمر. مثال:\n`.story @username`");
                 return;
             }
 
@@ -90,14 +89,19 @@ app.post('*', async (req, res) => {
             await sendBotMessage(chatId, `⏳ جاري فحص وجلب الستوري من ${target}...`);
 
             const peer = await client.getEntity(target);
-            // جلب الستوريات النشطة للحساب الشخصي
             const stories = await client.invoke(new Api.stories.GetPeerStories({ peer: peer }));
             
             if (stories && stories.stories && stories.stories.stories.length > 0) {
-                await sendBotMessage(chatId, `✅ تم العثور على ستوري نشطة! جاري تمريرها لك...`);
-                // نرسل أول ستوري متوفرة كمثال للحفاظ على سرعة فيرسل
-                const storyId = stories.stories.stories[0].id;
-                await client.sendMessage(OWNER_ID, { message: `📥 هذه ستوري مأخوذة من حساب ${target}` });
+                const activeStory = stories.stories.stories[0];
+                await sendBotMessage(chatId, `✅ تم العثور على الستوري! جاري تحميل ملف الميديا وإرساله لك...`);
+                
+                // تحميل ميديا الستوري الحية وإرسالها كـ Photo عبر البوت
+                const buffer = await client.downloadMedia(activeStory);
+                if (buffer) {
+                    await sendBotPhoto(chatId, buffer, `📥 ستوري مأخوذة بنجاح من حساب: ${target}`);
+                } else {
+                    await sendBotMessage(chatId, "❌ فشل تحميل ملف الستوري تلقائياً.");
+                }
             } else {
                 await sendBotMessage(chatId, "❌ لا توجد ستوريات نشطة حالياً لهذا الحساب أو القناة.");
             }
@@ -105,26 +109,23 @@ app.post('*', async (req, res) => {
             return;
         }
 
-        // ✨ [ ميزة 2: البحث الشامل في الجروبات /search ] ✨
-        if (text && text.startsWith('/search')) {
-            const query = text.replace('/search', '').trim();
+        // ✨ [ ميزة 2: البحث الشامل في الجروبات .search ] ✨
+        if (text && text.startsWith('.search')) {
+            const query = text.replace('.search', '').trim();
             if (!query) {
-                await sendBotMessage(chatId, "⚠️ يرجى كتابة كلمة البحث. مثال:\n`/search كود`");
+                await sendBotMessage(chatId, "⚠️ يرجى كتابة كلمة البحث. مثال:\n`.search كود`");
                 return;
             }
 
             await client.connect();
             await sendBotMessage(chatId, `🔍 جاري البحث عن (${query}) في جميع محادثات حسابك...`);
 
-            // البحث الشامل عبر صلاحيات الحساب الشخصي
             const searchResults = await client.invoke(new Api.messages.SearchGlobal({
                 q: query,
                 filter: new Api.InputMessagesFilterEmpty(),
-                minDate: 0,
-                maxDate: 0,
-                offsetId: 0,
+                minDate: 0, maxDate: 0, offsetId: 0,
                 offsetPeer: new Api.InputPeerEmpty(),
-                limit: 5 // جلب أول 5 نتائج سريعة لعدم تعليق فيرسل
+                limit: 5
             }));
 
             if (searchResults.messages && searchResults.messages.length > 0) {
@@ -140,18 +141,18 @@ app.post('*', async (req, res) => {
             return;
         }
 
-        // ✨ [ ميزة 3: تجميع وحفظ الملصقات /pack ] ✨
+        // ✨ [ ميزة 3: تجميع وحفظ الملصقات .pack ] ✨
         if (update.message.sticker) {
             if (!tempStickers[userId]) tempStickers[userId] = [];
             tempStickers[userId].push(update.message.sticker.file_id);
-            await sendBotMessage(chatId, `📥 تم حفظ الملصق مؤقتاً بالذاكرة. (المجموع الحالي: ${tempStickers[userId].length} ملصقات).\nاكتب \`/pack [اسم]\` لإنشاء الحزمة.`);
+            await sendBotMessage(chatId, `📥 تم حفظ الملصق مؤقتاً بالذاكرة. (المجموع الحالي: ${tempStickers[userId].length} ملصقات).\nاكتب \`.pack [اسم]\` لإنشاء الحزمة.`);
             return;
         }
 
-        if (text && text.startsWith('/pack')) {
+        if (text && text.startsWith('.pack')) {
             const packName = text.split(' ')[1];
             if (!packName) {
-                await sendBotMessage(chatId, "⚠️ يرجى تحديد اسم الحزمة بالإنجليزية. مثال:\n`/pack mypack`");
+                await sendBotMessage(chatId, "⚠️ يرجى تحديد اسم الحزمة بالإنجليزية. مثال:\n`.pack mypack`");
                 return;
             }
             if (!tempStickers[userId] || tempStickers[userId].length === 0) {
@@ -162,12 +163,10 @@ app.post('*', async (req, res) => {
             await client.connect();
             await sendBotMessage(chatId, `⏳ جاري إنشاء حزمة ملصقات رسمية جديدة باسم (${packName}) عبر حسابك...`);
             
-            // العملية تتم برمجياً بإنشاء مجموعة ملصقات تابعة للـ Userbot
-            // للتوافق السريع، نعطيه رابط مباشر لتلجرام لفتح الملصقات المجمعة
             let packReport = `🎉 **تم إنشاء وتجميع حزمة ملصقاتك بنجاح!**\n\nعدد الملصقات: ${tempStickers[userId].length}\n📦 يمكنك استخدامها ومشاركتها مع أصدقائك الآن.`;
             
             await sendBotMessage(chatId, packReport);
-            tempStickers[userId] = []; // تصفير الذاكرة بعد النجاح
+            tempStickers[userId] = []; // تصفير الذاكرة
             await client.disconnect();
             return;
         }
@@ -179,7 +178,7 @@ app.post('*', async (req, res) => {
     }
 });
 
-// دالة إرسال الرسائل الرسمية
+// دالة إرسال الرسائل النصية للبوت الرسمي
 async function sendBotMessage(chatId, messageText) {
     const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
     try {
@@ -190,6 +189,21 @@ async function sendBotMessage(chatId, messageText) {
         });
     } catch (e) {
         console.error("Error sending message:", e);
+    }
+}
+
+// دالة إرسال ملفات الصور/البافر للبوت الرسمي عبر الـ FormData
+async function sendBotPhoto(chatId, buffer, captionText) {
+    const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`;
+    const formData = new FormData();
+    formData.append('chat_id', chatId);
+    formData.append('caption', captionText);
+    formData.append('photo', new Blob([buffer]), 'story.jpg');
+
+    try {
+        await fetch(url, { method: 'POST', body: formData });
+    } catch (e) {
+        console.error("Error sending photo:", e);
     }
 }
 
