@@ -6,16 +6,16 @@ const { Api } = require('telegram');
 const app = express();
 app.use(express.json());
 
-// === [ ⚙️ جلب الإعدادات التقنية من بيئة فيرسل ] ===
+// === [ ⚙️ جلب الإعدادات من بيئة فيرسل ] ===
 const BOT_TOKEN = process.env.BOT_TOKEN ? process.env.BOT_TOKEN.trim() : "";
 const API_ID = process.env.API_ID ? parseInt(process.env.API_ID.trim()) : 0;
 const API_HASH = process.env.API_HASH ? process.env.API_HASH.trim() : "";
 const STRING_SESSION = process.env.STRING_SESSION ? process.env.STRING_SESSION.trim() : "";
 const OWNER_ID = process.env.OWNER_ID ? parseInt(process.env.OWNER_ID.trim()) : 0;
 
-// === [ 🛸 استقبال طلبات الـ Webhook التلقائية ] ===
+// === [ 🛸 استقبال طلبات الـ Webhook ] ===
 app.post('*', async (req, res) => {
-    res.status(200).send('OK'); // الرد الفوري لتلجرام لمنع الـ Timeout وتكرار الرسائل
+    res.status(200).send('OK'); // الرد الفوري لمنع التكرار والـ Timeout
 
     const update = req.body;
     if (!update || !update.message) return;
@@ -24,87 +24,105 @@ app.post('*', async (req, res) => {
     const userId = Number(update.message.from.id);
     const text = update.message.text ? update.message.text.trim() : null;
 
-    // الحماية والأمان: البوت لا يستجيب إلا لك حصراً بصفتك المالك
+    // الحماية والأمان: أنت فقط من يتحكم
     if (userId !== OWNER_ID) return;
 
-    // 🌟 [ رسالة الترحيب والتعليمات ] 🌟
-    if (text === '.start') {
-        const welcomeMessage = `🕵️‍♂️ **مرحباً بك في بوت مستخرج جهات الاتصال والأرقام الخفية!**
-
-المنظومة مجهزة ومضبوطة بنظام النقطة المألوف لك:
-
-🔍 **لاستخراج رقم وبيانات أي حساب:**
-← اكتب الأمر متبوعاً بالمعرف (اليوزر)، مثل:
-\`.phone @username\`
-
-✨ _تم ضبط الكود ليعمل بنظام المعالجة الفورية الخفيفة عبر Vercel._`;
-        
-        await sendBotMessage(chatId, welcomeMessage);
-        return;
-    }
-
-    // 🌟 [ ضبط الميزة: استخراج بطاقة الاتصال والرقم الخفي ] 🌟
-    if (text && text.startsWith('.phone')) {
+    // 🌟 [ تشغيل وفحص أمر الفحص العميق .inspect ] 🌟
+    if (text && text.startsWith('.inspect')) {
         const target = text.split(' ')[1];
         if (!target) {
-            await sendBotMessage(chatId, "⚠️ **تنبيه:** يرجى كتابة المعرف (اليوزر) بعد الأمر.\nمثال: `.phone @username`");
+            await sendBotMessage(chatId, "⚠️ **تنبيه:** يرجى كتابة (المعرف أو الآيدي الرقمي) بعد الأمر.\nمثال باليوزر: `.inspect @username`\nمثال بالآيدي: `.inspect 123456789`");
             return;
         }
 
-        // إنشاء جلسة سريعة ومؤقتة عبر السيزن آيدي لحسابك الشخصي
         const client = new TelegramClient(new StringSession(STRING_SESSION), API_ID, API_HASH, {
             connectionRetries: 1,
-            timeout: 10000 // قطع الاتصال فوراً بعد 10 ثوانٍ لحماية السيرفر
+            timeout: 12000
         });
 
         try {
             await client.connect();
-            await sendBotMessage(chatId, `⏳ **جاري الفحص البرمجي لـ ${target} وجلب البيانات الخفية...**`);
+            await sendBotMessage(chatId, `🔍 **جاري الفحص العميق واستخراج البيانات من خوادم تلجرام لـ [ ${target} ]...**`);
 
-            // جلب الكيان الكامل للحساب المستهدف عبر التلجرام
-            const userEntity = await client.getEntity(target);
+            let entity;
+            
+            // 🧠 ذكاء الفحص: التحقق هل المدخل آيدي رقمي أم معرف نصي
+            if (/^\d+$/.test(target) || /^-?\d+$/.test(target)) {
+                // إذا كان المدخل رقماً، يتم تحويله لـ BigInt ليفهمه تلجرام كـ ID
+                const numericId = BigInt(target);
+                entity = await client.getEntity(numericId);
+            } else {
+                // إذا كان المدخل يوزر يبدأ بـ @ أو رابط
+                entity = await client.getEntity(target);
+            }
 
-            if (userEntity) {
-                const firstName = userEntity.firstName || "";
-                const lastName = userEntity.lastName || "";
-                const fullName = `${firstName} ${lastName}`.trim() || "بدون اسم مسجل";
-                const username = userEntity.username ? `@${userEntity.username}` : "لا يوجد";
-                const userIdStr = userEntity.id ? userEntity.id.toString() : "غير معروف";
-                
-                // جلب الرقم الخفي الموثق بداخل سيرفرات تلجرام للحساب
-                const phoneNumber = userEntity.phone ? `+${userEntity.phone}` : null;
-
-                let report = `🕵️‍♂️ **تم استخراج بيانات البطاقة الشخصية بنجاح:**\n\n`;
-                report += `👤 **الاسم المسجل:** ${fullName}\n`;
-                report += `🆔 **آيدي الحساب (ID):** \`${userIdStr}\`\n`;
-                report += `🌐 **المعرف الحالي:** ${username}\n`;
-                
-                if (phoneNumber) {
-                    report += `📱 **الرقم الخفي المستخرج:** \`${phoneNumber}\`\n\n`;
-                    report += `✅ _تمت مطابقة البيانات وسحب الرقم بنجاح عبر بروتوكول جهات الاتصال._`;
-                } else {
-                    report += `📱 **الرقم الخفي المستخرج:** \`مخفي تماماً للعامة\`\n\n`;
-                    report += `💡 _هذا الشخص يغلق خصوصية الرقم بالكامل ولم يشارك كارت اتصاله معك أو مع أي جروب مشترك سابقاً._`;
+            if (entity) {
+                // 1. تحديد نوع الحساب بدقة
+                let type = "👤 مستخدم (User Account)";
+                if (entity.className === 'Channel') {
+                    type = entity.broadcast ? "📢 قناة رسمية (Channel)" : "👥 مجموعة خارقة (Supergroup)";
+                } else if (entity.className === 'Chat') {
+                    type = "👥 مجموعة عادية (Basic Group)";
                 }
+
+                // 2. تجميع البيانات الأساسية
+                const accountId = entity.id ? entity.id.toString() : "غير معروف";
+                const title = entity.title || `${entity.firstName || ""} ${entity.lastName || ""}`.trim() || "بدون اسم";
+                const username = entity.username ? `@${entity.username}` : "لا يوجد معرف حالياً";
+                
+                // 3. كشف ميزة التحقق (الحسابات الموثقة)
+                const isVerified = entity.verified ? "✅ موثق بنجمة زرقاء" : "❌ غير موثق";
+                const isScam = entity.scam ? "⚠️ نعم (تحذير احتيال!)" : "✅ نظيف";
+                const isFake = entity.fake ? "⚠️ نعم (حساب مزيف!)" : "✅ نظيف";
+
+                // 4. كشف البلاغات والقيود الدولية (Restrictions)
+                let restrictionReport = "✅ لا توجد قيود أو بلاغات إدارية";
+                if (entity.restrictionReason && entity.restrictionReason.length > 0) {
+                    restrictionReport = entity.restrictionReason.map(r => `• ${r.platform}: ${r.reason}`).join('\n');
+                }
+
+                // 5. حساب تاريخ الإنشاء التقريبي (بناءً على النطاقات الرقمية للآيدي في تلجرام)
+                let approximateCreation = "غير قادر على الحساب";
+                if (entity.id) {
+                    const idNum = Number(entity.id);
+                    if (idNum < 200000000) approximateCreation = "قديم جداً (بين 2013 - 2015)";
+                    else if (idNum < 500000000) approximateCreation = "متوسط العمر (بين 2016 - 2017)";
+                    else if (idNum < 1000000000) approximateCreation = "حديث نسبياً (بين 2018 - 2019)";
+                    else if (idNum < 2000000000) approximateCreation = "جديد (بين 2020 - 2022)";
+                    else approximateCreation = "جديد جداً (بين 2023 - 2026)";
+                }
+
+                // صياغة التقرير التقني النهائي الفخم
+                let report = `📊 **التقرير الفني العميق للمُعرّف (Metadata):**\n\n`;
+                report += `🏷️ **الاسم الحركي:** \`${title}\`\n`;
+                report += `🆔 **الآيدي الثابت (ID):** \`${accountId}\`\n`;
+                report += `🌐 **المعرف الحالي:** ${username}\n`;
+                report += `🗂️ **تصنيف الكيان:** \`${type}\`\n`;
+                report += `⏳ **تاريخ الإنشاء التقريبي:** \`${approximateCreation}\`\n`;
+                report += `⭐️ **حالة التوثيق:** ${isVerified}\n\n`;
+                
+                report += `🚨 **مؤشرات الأمان والبلاغات:**\n`;
+                report += `• نظام كاشف الاحتيال (Scam): ${isScam}\n`;
+                report += `• نظام كاشف التزييف (Fake): ${isFake}\n`;
+                report += `• القيود والحظر الإداري:\n_${restrictionReport}_\n\n`;
+                report += `💡 _ملاحظة: إذا قام الشخص بتغيير يوزره، يمكنك تتبع اسمه الجديد دائماً عبر وضع الآيدي الثابت الخاص به._`;
 
                 await sendBotMessage(chatId, report);
             } else {
-                await sendBotMessage(chatId, "❌ **فشل:** لم يتم العثور على هذا الحساب، تأكد من صحة اليوزر.");
+                await sendBotMessage(chatId, "❌ **فشل:** لم يتم العثور على أي بيانات لهذا الهدف.");
             }
 
-            // إغلاق الجلسة فوراً لتوفير موارد السيرفر وضمان الاستقرار
             await client.disconnect();
-
         } catch (error) {
-            console.error("Error in phone command:", error);
-            await sendBotMessage(chatId, `❌ **حدث خطأ تقني أثناء الفحص:**\n${error.message}`);
+            console.error("Error in inspect command:", error);
+            await sendBotMessage(chatId, `❌ **فشل الفحص:** قد يكون الحساب محذوفاً تماماً، أو أن الآيدي خاطئ.\nتفاصيل الخطأ: \`${error.message}\``);
             try { await client.disconnect(); } catch(e){}
         }
         return;
     }
 });
 
-// دالة إرسال الرسائل النصية المنسقة عبر البوت الرسمي
+// دالة إرسال الرسائل النصية المنسقة
 async function sendBotMessage(chatId, messageText) {
     const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
     try {
